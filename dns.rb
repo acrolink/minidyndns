@@ -486,8 +486,10 @@ def handle_http_connection(connection)
 	# This must not take longer that the configured number of seconds or we'll kill the connection.
 	# The idea is to handle all connections in a single thread (to avoid DOS attacks) but prevent
 	# stupid routers from keeping connections open for ever.
-	method, path_and_querystring, params, user, password, proxy_client_ip = nil, nil, nil, nil, nil, nil
+	method, path_and_querystring, params, user, password, proxy_client_ip, token = nil, nil, nil, nil, nil, nil
+	is_token_based_auth = false
 	begin
+
 		# I know timeout() is considered harmful but we rely on the global interpreter lock anyway to
 		# synchronize access to $db. So the server only works correctly with interpreters that have a
 		# global interpreter lock (e.g. MRI). Also this server isn't designed for high-load scenarios.
@@ -525,6 +527,13 @@ def handle_http_connection(connection)
 					proxy_client_ip = $1 if proxy_client_ip =~ /^\[(.+)\](\:\d+)?$/
 				end
 			end
+			
+			if params.include? "token"
+				is_token_based_auth = true
+				user = CGI::unescape params["user"].first
+				password = CGI::unescape params["token"].first
+			end
+
 		end
 	rescue Timeout::Error
 		log "#{log_prefix}: Client took to long to send data, ignoring"
@@ -539,8 +548,13 @@ def handle_http_connection(connection)
 		# Tell the client if the name can't be changed
 		throw :status, :unchangable if $db[user]["pass"].to_s.strip == ""
 		# Make sure we're authenticated
-		throw :status, :not_authorized unless password == $db[user]["pass"]
-		
+		if is_token_based_auth == false
+			throw :status, :not_authorized unless password == $db[user]["pass"]
+		else 
+			throw :status, :not_authorized unless password == $db[user]["token"]
+		end
+
+
 		if params.include? "myip"
 			ip_as_string = CGI::unescape params["myip"].first
 		elsif proxy_client_ip
